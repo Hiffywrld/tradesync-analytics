@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tradesync
+      POSTGRES_PASSWORD: tradesync
+      POSTGRES_DB: tradesync
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradesync"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  auth-service:
+    build: ./services/auth-service
+    environment:
+      PORT: 4001
+      DATABASE_URL: postgres://tradesync:tradesync@postgres:5432/tradesync
+      JWT_SECRET: super-secret-dev-key
+    ports:
+      - "4001:4001"
+    depends_on:
+      postgres:
+        condition: service_healthy
