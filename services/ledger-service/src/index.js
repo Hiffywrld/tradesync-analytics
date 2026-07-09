@@ -7,12 +7,20 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 4002;
+// Fee rate comes from config (env / ConfigMap later) — NOT hard-coded.
+const FEE_RATE = parseFloat(process.env.FEE_RATE || "0.02"); // 2% default
 
-// Health check — for Kubernetes later.
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "ledger" }));
 
-// Record a transaction. Protected — needs a valid token.
-// (Fee math comes on Day 6. For now, fee is 0 so we can build + test the basics.)
+// List current exchange rates.
+app.get("/rates", requireAuth, async (_req, res) => {
+  const { rows } = await pool.query(
+    "SELECT currency, ngn_rate, as_of FROM exchange_rates ORDER BY currency"
+  );
+  res.json({ rates: rows });
+});
+
+// Record a transaction — now with real fee math.
 app.post("/transactions", requireAuth, async (req, res) => {
   const { type, gross_amount, currency, category } = req.body || {};
   if (!type || !["INCOME", "EXPENSE"].includes(type)) {
@@ -24,8 +32,19 @@ app.post("/transactions", requireAuth, async (req, res) => {
   }
   if (!currency) return res.status(400).json({ error: "currency is required" });
 
-  const fee = 0;                    // placeholder — real fee logic on Day 6
-  const net = gross;                // placeholder
+  // Make sure we know this currency's rate before accepting it.
+  const known = await pool.query(
+    "SELECT 1 FROM exchange_rates WHERE currency = $1",
+    [currency.toUpperCase()]
+  );
+  if (known.rowCount === 0) {
+    return res.status(400).json({ error: `unknown currency ${currency}` });
+  }
+
+  // THE FEE MATH:
+  const fee = +(gross * FEE_RATE).toFixed(2);
+  // INCOME: you keep gross minus fee.  EXPENSE: it costs you gross plus fee.
+  const net = type === "INCOME" ? +(gross - fee).toFixed(2) : +(gross + fee).toFixed(2);
 
   const { rows } = await pool.query(
     `INSERT INTO transactions (user_id, type, gross_amount, fee, net_amount, currency, category)
@@ -42,6 +61,17 @@ app.get("/transactions", requireAuth, async (req, res) => {
     [req.userId]
   );
   res.json({ transactions: rows });
+});
+
+// Wallet balances grouped by currency (income adds, expense subtracts).
+app.get("/wallets", requireAuth, async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT currency,
+            SUM(CASE WHEN type='INCOME' THEN net_amount ELSE -net_amount END) AS balance
+     FROM transactions WHERE user_id = $1 GROUP BY currency ORDER BY currency`,
+    [req.userId]
+  );
+  res.json({ wallets: rows });
 });
 
 migrate()
