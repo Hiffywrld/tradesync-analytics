@@ -36,6 +36,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
+  analytics-service:
+    build: ./services/analytics-service
+    environment:
+      PORT: 4003
+      LEDGER_URL: http://ledger-service:4002
+    ports:
+      - "4003:4003"
+    depends_on:
+      - ledger-service
 volumes:
   pgdata:
